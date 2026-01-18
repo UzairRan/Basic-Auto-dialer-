@@ -282,7 +282,7 @@ elif page == "📋 Contact Manager":
 
 # PAGE 3: Dialer Control
 elif page == "📞 Dialer Control":
-    st.markdown('<h2 class="sub-header">🎯 Dialer Control Panel</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header"> Dialer Control Panel</h2>', unsafe_allow_html=True)
     
     if st.session_state.contacts.empty:
         st.warning("⚠️ No contacts loaded. Please import contacts first!")
@@ -412,7 +412,7 @@ elif page == "📞 Dialer Control":
     
     # Campaign Auto-dialer
     st.markdown("---")
-    st.markdown("###  Campaign Auto-Dialer")
+    st.markdown("### Campaign Auto-Dialer")
     
     if st.session_state.campaign_active:
         st.warning("⚠️ Campaign is running in auto mode")
@@ -435,7 +435,7 @@ elif page == "📞 Dialer Control":
                 
                 st.rerun()
     else:
-        if st.button("🚀 Start Auto Campaign", type="secondary", use_container_width=True):
+        if st.button("Start Auto Campaign", type="secondary", use_container_width=True):
             st.session_state.campaign_active = True
             st.session_state.current_index = 0
             st.rerun()
@@ -446,10 +446,10 @@ elif page == "📊 Admin Dashboard":
         st.warning("🔒 Admin access required. Switch to admin role in sidebar.")
         st.stop()
     
-    st.markdown('<h2 class="sub-header">👨‍💼 Admin Dashboard</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header"> Admin Dashboard</h2>', unsafe_allow_html=True)
     
     # Agent Management
-    st.markdown("### 👥 Agent Management")
+    st.markdown("###  Agent Management")
     
     # Add new agent
     with st.expander("➕ Add New Agent"):
@@ -566,7 +566,7 @@ elif page == "⚙️ Settings":
         st.checkbox("Pause service on payment failure", value=True)
     
     with tab3:
-        st.markdown("### 🔗 VoIP Integration")
+        st.markdown("###  VoIP Integration")
         
         voip_provider = st.selectbox(
             "VoIP Service Provider",
