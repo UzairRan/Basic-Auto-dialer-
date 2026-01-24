@@ -39,6 +39,8 @@ if 'agents' not in st.session_state:
         'agent2': {'calls_today': 28, 'active': False, 'subscription': 'annual'},
         'agent3': {'calls_today': 15, 'active': True, 'subscription': 'monthly'}
     }
+if 'dialing_mode' not in st.session_state:
+    st.session_state.dialing_mode = 'single'  # 'single' or 'power'
 
 # Custom CSS for better UI
 st.markdown("""
@@ -84,6 +86,20 @@ st.markdown("""
     }
     .dialing-animation {
         animation: pulse 2s infinite;
+    }
+    .power-call-card {
+        background-color: #FEF3C7;
+        border: 1px solid #F59E0B;
+        border-radius: 8px;
+        padding: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+    .single-call-card {
+        background-color: #DBEAFE;
+        border: 1px solid #3B82F6;
+        border-radius: 8px;
+        padding: 0.75rem;
+        margin-bottom: 0.5rem;
     }
     @keyframes pulse {
         0% { opacity: 1; }
@@ -196,12 +212,14 @@ if page == "🏠 Dashboard":
     if st.session_state.dialer.call_history:
         recent_calls = st.session_state.dialer.call_history[-5:]  # Last 5 calls
         for call in reversed(recent_calls):
+            mode_icon = "⚡" if call.get('mode') == 'power' else "📞"
             status = "✅ Answered" if call['answered'] else "❌ Not Answered"
-            with st.expander(f"{call['contact'].get('name', 'Unknown')} - {call['contact']['phone']} - {status}"):
+            with st.expander(f"{mode_icon} {call['contact'].get('name', 'Unknown')} - {call['contact']['phone']} - {status}"):
                 col1, col2 = st.columns(2)
                 with col1:
                     st.write(f"**Time:** {call['start_time'].strftime('%I:%M %p')}")
-                    st.write(f"**Duration:** {call['duration']:.1f}s")
+                    st.write(f"**Duration:** {call.get('duration', 0):.1f}s")
+                    st.write(f"**Mode:** {call.get('mode', 'single').title()}")
                 with col2:
                     st.write(f"**Attempts:** {len(call['attempts'])}")
                     st.write(f"**State:** {call['contact'].get('state', 'N/A')}")
@@ -234,8 +252,6 @@ elif page == "📋 Contact Manager":
             # Manual mapping override
             st.markdown("### 🔧 Manual Field Mapping (Optional)")
             col1, col2, col3 = st.columns(3)
-            
-            # You could add manual mapping controls here
             
             # Preview data
             st.markdown("### 👁️ Data Preview")
@@ -282,158 +298,266 @@ elif page == "📋 Contact Manager":
 
 # PAGE 3: Dialer Control
 elif page == "📞 Dialer Control":
-    st.markdown('<h2 class="sub-header"> Dialer Control Panel</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header">🎯 Dialer Control Panel</h2>', unsafe_allow_html=True)
     
     if st.session_state.contacts.empty:
         st.warning("⚠️ No contacts loaded. Please import contacts first!")
         st.stop()
     
-    # Dialer Settings
+    # Dialer Settings - NEW: Added Dialing Mode Selector
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        max_redials = st.selectbox(
-            "🔁 Redial Attempts",
-            options=[0, 1, 2],
-            index=2,
-            format_func=lambda x: ["Single Dial", "Double Dial", "Triple Dial"][x],
-            help="Number of redial attempts before moving to next contact"
+        # NEW: Dialing Mode Selector
+        st.session_state.dialing_mode = st.selectbox(
+            "📱 Dialing Mode",
+            options=["single", "power"],
+            format_func=lambda x: "Single Call Mode" if x == "single" else "⚡ Power Mode (10 calls)",
+            help="Single: One call at a time with redial\nPower: 10 calls simultaneously, no redials"
         )
     
     with col2:
-        dialing_mode = st.selectbox(
-            "📱 Dialing Mode",
-            options=["preview", "progressive", "predictive"],
-            index=0,
-            help="Preview: Agent clicks to dial each contact\nProgressive: Auto-dial with delay\nPredictive: Auto-dial based on availability"
-        )
+        # Show redial options only for single mode
+        if st.session_state.dialing_mode == "single":
+            max_redials = st.selectbox(
+                "🔁 Redial Attempts",
+                options=[0, 1, 2],
+                index=2,
+                format_func=lambda x: ["Single Dial", "Double Dial", "Triple Dial"][x],
+                help="Number of redial attempts before moving to next contact"
+            )
+        else:
+            st.info("⚡ Power Mode")
+            st.caption("10 calls simultaneously • No redials")
+            max_redials = 0  # No redials in power mode
     
     with col3:
         call_delay = st.slider(
-            "⏱️ Delay Between Calls (seconds)",
+            "⏱️ Delay Between Batches (seconds)",
             min_value=1,
             max_value=60,
             value=5,
-            help="Time to wait before dialing next contact"
+            help="Time to wait before next batch of calls"
         )
     
-    # Current Contact Display
+    # Get current contacts based on mode
     current_contact = None
-    if st.session_state.current_index < len(st.session_state.contacts):
-        current_contact = st.session_state.contacts.iloc[st.session_state.current_index].to_dict()
+    next_batch_contacts = []
     
-    # Call Status Box
+    if st.session_state.dialing_mode == "single":
+        if st.session_state.current_index < len(st.session_state.contacts):
+            current_contact = st.session_state.contacts.iloc[st.session_state.current_index].to_dict()
+    else:  # Power mode
+        # Get next 10 contacts for power dialing
+        start_idx = st.session_state.current_index
+        end_idx = min(start_idx + 10, len(st.session_state.contacts))
+        if start_idx < len(st.session_state.contacts):
+            next_batch_contacts = st.session_state.contacts.iloc[start_idx:end_idx].to_dict('records')
+    
+    # Call Status Box - DIFFERENT UI FOR EACH MODE
     st.markdown('<div class="call-status-box">', unsafe_allow_html=True)
     
-    col_status1, col_status2 = st.columns([2, 1])
-    
-    with col_status1:
-        if st.session_state.dialer.is_dialing:
-            st.markdown(f"### 🔄 {st.session_state.dialer.current_call['status'].upper()}")
-            
-            if current_contact:
-                st.markdown(f"**Contact:** {current_contact.get('name', 'Unknown')}")
-                st.markdown(f"**Number:** {current_contact['phone']}")
-                st.markdown(f"**State:** {current_contact.get('state', 'N/A')}")
+    if st.session_state.dialing_mode == "single":
+        # SINGLE MODE UI
+        col_status1, col_status2 = st.columns([2, 1])
+        
+        with col_status1:
+            if st.session_state.dialer.is_dialing and st.session_state.dialer.dialing_mode == "single":
+                st.markdown(f"### 🔄 {st.session_state.dialer.current_call['status'].upper()}")
                 
-                # Pre-dial announcement simulation
-                with st.chat_message("assistant"):
-                    st.write(f"*Pre-dial announcement:* Calling **{current_contact.get('name', 'Unknown')}** from **{current_contact.get('state', 'N/A')}**...")
-        
-        elif st.session_state.dialer.current_call and st.session_state.dialer.current_call['answered']:
-            st.markdown("### ✅ CALL ANSWERED")
-            st.markdown("### 📱 Screen Pop Active")
+                if current_contact:
+                    st.markdown(f"**Contact:** {current_contact.get('name', 'Unknown')}")
+                    st.markdown(f"**Number:** {current_contact['phone']}")
+                    st.markdown(f"**State:** {current_contact.get('state', 'N/A')}")
+                    
+                    # Pre-dial announcement simulation
+                    with st.chat_message("assistant"):
+                        st.write(f"*Pre-dial announcement:* Calling **{current_contact.get('name', 'Unknown')}** from **{current_contact.get('state', 'N/A')}**...")
             
-            # Screen Pop Simulation
-            contact = st.session_state.dialer.current_call['contact']
-            col_info1, col_info2 = st.columns(2)
-            with col_info1:
-                st.info(f"**Name:** {contact.get('name', 'Unknown')}")
-                st.info(f"**Phone:** {contact['phone']}")
-            with col_info2:
-                st.info(f"**State:** {contact.get('state', 'N/A')}")
-                st.info(f"**Call Duration:** {st.session_state.dialer.current_call.get('duration', 0):.1f}s")
+            elif st.session_state.dialer.current_call and st.session_state.dialer.current_call['answered']:
+                st.markdown("### ✅ CALL ANSWERED")
+                st.markdown("### 📱 Screen Pop Active")
+                
+                # Screen Pop Simulation
+                contact = st.session_state.dialer.current_call['contact']
+                col_info1, col_info2 = st.columns(2)
+                with col_info1:
+                    st.info(f"**Name:** {contact.get('name', 'Unknown')}")
+                    st.info(f"**Phone:** {contact['phone']}")
+                with col_info2:
+                    st.info(f"**State:** {contact.get('state', 'N/A')}")
+                    st.info(f"**Call Duration:** {st.session_state.dialer.current_call.get('duration', 0):.1f}s")
+            
+            elif current_contact:
+                st.markdown("### ⏳ READY TO DIAL (Single Mode)")
+                st.markdown(f"**Next Contact:** {current_contact.get('name', 'Unknown')}")
+                st.markdown(f"**Phone:** {current_contact['phone']}")
+                st.markdown(f"**Progress:** {st.session_state.current_index + 1} of {len(st.session_state.contacts)}")
         
-        elif current_contact:
-            st.markdown("### ⏳ READY TO DIAL")
-            st.markdown(f"**Next Contact:** {current_contact.get('name', 'Unknown')}")
-            st.markdown(f"**Phone:** {current_contact['phone']}")
-            st.markdown(f"**Progress:** {st.session_state.current_index + 1} of {len(st.session_state.contacts)}")
+        with col_status2:
+            # Progress circle for single mode
+            if not st.session_state.contacts.empty:
+                progress = (st.session_state.current_index + 1) / len(st.session_state.contacts)
+                st.markdown(f"""
+                <div style="text-align: center;">
+                    <div style="font-size: 2rem; font-weight: bold; color: #3B82F6;">
+                        {st.session_state.current_index + 1}/{len(st.session_state.contacts)}
+                    </div>
+                    <div style="font-size: 0.9rem; color: #6B7280;">
+                        Contacts
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.progress(progress)
     
-    with col_status2:
-        # Progress circle
-        if not st.session_state.contacts.empty:
-            progress = (st.session_state.current_index + 1) / len(st.session_state.contacts)
-            st.markdown(f"""
-            <div style="text-align: center;">
-                <div style="font-size: 2rem; font-weight: bold; color: #3B82F6;">
-                    {st.session_state.current_index + 1}/{len(st.session_state.contacts)}
-                </div>
-                <div style="font-size: 0.9rem; color: #6B7280;">
-                    Contacts
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    else:  # POWER MODE UI
+        st.markdown("### ⚡ POWER DIAL MODE ACTIVE")
+        st.markdown(f"**Next Batch:** {len(next_batch_contacts)} contacts ready")
+        st.markdown(f"**Progress:** {st.session_state.current_index} of {len(st.session_state.contacts)} contacts processed")
+        
+        # Show active power calls
+        if st.session_state.dialer.is_dialing and st.session_state.dialer.dialing_mode == "power":
+            active_calls = st.session_state.dialer.get_active_power_calls()
+            completed_calls = st.session_state.dialer.get_completed_power_calls()
             
-            st.progress(progress)
+            col_power1, col_power2 = st.columns(2)
+            
+            with col_power1:
+                st.markdown("#### 📞 Active Calls")
+                if active_calls:
+                    for call in active_calls:
+                        with st.container():
+                            st.markdown(f'<div class="power-call-card">', unsafe_allow_html=True)
+                            st.write(f"**{call['contact'].get('name', 'Unknown')}**")
+                            st.write(f"{call['contact']['phone']} • {call['contact'].get('state', 'N/A')}")
+                            st.write(f"Status: 🔄 Dialing...")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.info("No active calls")
+            
+            with col_power2:
+                st.markdown("#### ✅ Completed Calls")
+                if completed_calls:
+                    for call in completed_calls[:5]:  # Show last 5
+                        status_icon = "✅" if call['answered'] else "❌"
+                        with st.container():
+                            st.markdown(f'<div class="single-call-card">', unsafe_allow_html=True)
+                            st.write(f"{status_icon} **{call['contact'].get('name', 'Unknown')}**")
+                            st.write(f"{call['contact']['phone']} • {call.get('duration', 0):.1f}s")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.info("No completed calls yet")
+        else:
+            st.info("### 📋 Ready for Power Dialing")
+            if next_batch_contacts:
+                st.write(f"**Next {len(next_batch_contacts)} contacts to dial:**")
+                for i, contact in enumerate(next_batch_contacts[:3]):  # Show first 3
+                    st.write(f"{i+1}. {contact.get('name', 'Unknown')} - {contact['phone']}")
+                if len(next_batch_contacts) > 3:
+                    st.write(f"... and {len(next_batch_contacts) - 3} more")
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Dialer Control Buttons
+    # Dialer Control Buttons - DIFFERENT FOR EACH MODE
     col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
     
     with col_btn1:
-        if st.button("📞 Dial Now", type="primary", use_container_width=True):
-            if current_contact and not st.session_state.dialer.is_dialing:
-                st.session_state.dialer.start_dialing(current_contact, max_redials)
-                st.rerun()
+        if st.session_state.dialing_mode == "single":
+            if st.button("📞 Dial Now", type="primary", use_container_width=True):
+                if current_contact and not st.session_state.dialer.is_dialing:
+                    st.session_state.dialer.start_dialing(current_contact, max_redials, "single")
+                    st.rerun()
+        else:  # Power mode
+            if st.button("⚡ Dial 10 Now", type="primary", use_container_width=True):
+                if next_batch_contacts and not st.session_state.dialer.is_dialing:
+                    st.session_state.dialer.start_dialing(next_batch_contacts, 0, "power")
+                    st.rerun()
     
     with col_btn2:
-        if st.button("🔄 Redial", use_container_width=True, 
-                    disabled=not (st.session_state.dialer.current_call and 
-                                 st.session_state.dialer.current_call['status'] == 'failed')):
-            if current_contact:
-                st.session_state.dialer.start_dialing(current_contact, max_redials)
+        if st.session_state.dialing_mode == "single":
+            if st.button("🔄 Redial", use_container_width=True, 
+                        disabled=not (st.session_state.dialer.current_call and 
+                                     st.session_state.dialer.current_call['status'] == 'failed')):
+                if current_contact:
+                    st.session_state.dialer.start_dialing(current_contact, max_redials, "single")
+                    st.rerun()
+        else:  # Power mode
+            if st.button("🔄 Refresh Status", use_container_width=True):
+                st.session_state.dialer.update_power_calls_status()
                 st.rerun()
     
     with col_btn3:
         if st.button("⏭️ Skip", use_container_width=True):
-            if st.session_state.current_index < len(st.session_state.contacts) - 1:
-                st.session_state.current_index += 1
+            if st.session_state.dialing_mode == "single":
+                if st.session_state.current_index < len(st.session_state.contacts) - 1:
+                    st.session_state.current_index += 1
+                    st.session_state.dialer.reset()
+                    st.rerun()
+            else:  # Power mode
+                # Skip current batch (move forward by 10 or remaining)
+                skip_count = min(10, len(st.session_state.contacts) - st.session_state.current_index)
+                st.session_state.current_index += skip_count
                 st.session_state.dialer.reset()
                 st.rerun()
     
     with col_btn4:
-        if st.button("⏹️ End Call", use_container_width=True, 
+        if st.button("⏹️ End Call/Batch", use_container_width=True, 
                     disabled=not st.session_state.dialer.is_dialing):
             st.session_state.dialer.is_dialing = False
-            st.session_state.dialer._log_call()
+            if st.session_state.dialing_mode == "single" and st.session_state.dialer.current_call:
+                st.session_state.dialer._log_call(st.session_state.dialer.current_call)
             st.rerun()
     
-    # Campaign Auto-dialer
+    # Campaign Auto-dialer - WORKS FOR BOTH MODES
     st.markdown("---")
     st.markdown("### Campaign Auto-Dialer")
     
     if st.session_state.campaign_active:
-        st.warning("⚠️ Campaign is running in auto mode")
+        st.warning(f"⚠️ Campaign is running in {st.session_state.dialing_mode.upper()} mode")
         
-        # Simulate auto-dialing
+        # Auto-dialing logic based on mode
         if not st.session_state.dialer.is_dialing:
             time.sleep(1)  # Simulate delay
-            if st.session_state.current_index < len(st.session_state.contacts):
-                current_contact = st.session_state.contacts.iloc[st.session_state.current_index].to_dict()
-                st.session_state.dialer.start_dialing(current_contact, max_redials)
-                
-                # Check if call completed
-                if not st.session_state.dialer.is_dialing:
-                    st.session_state.current_index += 1
+            
+            if st.session_state.dialing_mode == "single":
+                # Single mode auto-dialing
+                if st.session_state.current_index < len(st.session_state.contacts):
+                    current_contact = st.session_state.contacts.iloc[st.session_state.current_index].to_dict()
+                    st.session_state.dialer.start_dialing(current_contact, max_redials, "single")
                     
-                    # Check if campaign completed
-                    if st.session_state.current_index >= len(st.session_state.contacts):
-                        st.session_state.campaign_active = False
-                        st.success("✅ Campaign completed all contacts!")
-                
-                st.rerun()
+                    # Check if call completed
+                    if not st.session_state.dialer.is_dialing:
+                        st.session_state.current_index += 1
+                        
+                        # Check if campaign completed
+                        if st.session_state.current_index >= len(st.session_state.contacts):
+                            st.session_state.campaign_active = False
+                            st.success("✅ Campaign completed all contacts!")
+                    
+                    st.rerun()
+            else:  # Power mode auto-dialing
+                if st.session_state.current_index < len(st.session_state.contacts):
+                    # Get next batch of 10
+                    start_idx = st.session_state.current_index
+                    end_idx = min(start_idx + 10, len(st.session_state.contacts))
+                    batch_contacts = st.session_state.contacts.iloc[start_idx:end_idx].to_dict('records')
+                    
+                    st.session_state.dialer.start_dialing(batch_contacts, 0, "power")
+                    
+                    # Update dialer status
+                    st.session_state.dialer.update_power_calls_status()
+                    
+                    # Move to next batch if current batch is done
+                    if not st.session_state.dialer.is_dialing:
+                        st.session_state.current_index = end_idx
+                        
+                        # Check if campaign completed
+                        if st.session_state.current_index >= len(st.session_state.contacts):
+                            st.session_state.campaign_active = False
+                            st.success("✅ Campaign completed all contacts!")
+                    
+                    st.rerun()
     else:
         if st.button("Start Auto Campaign", type="secondary", use_container_width=True):
             st.session_state.campaign_active = True
@@ -446,10 +570,10 @@ elif page == "📊 Admin Dashboard":
         st.warning("🔒 Admin access required. Switch to admin role in sidebar.")
         st.stop()
     
-    st.markdown('<h2 class="sub-header"> Admin Dashboard</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header">👨‍💼 Admin Dashboard</h2>', unsafe_allow_html=True)
     
     # Agent Management
-    st.markdown("###  Agent Management")
+    st.markdown("### 👥 Agent Management")
     
     # Add new agent
     with st.expander("➕ Add New Agent"):
@@ -566,7 +690,7 @@ elif page == "⚙️ Settings":
         st.checkbox("Pause service on payment failure", value=True)
     
     with tab3:
-        st.markdown("###  VoIP Integration")
+        st.markdown("### 🔗 VoIP Integration")
         
         voip_provider = st.selectbox(
             "VoIP Service Provider",
@@ -588,5 +712,4 @@ elif page == "⚙️ Settings":
         st.markdown("---")
         st.markdown("#### Webhook Configuration")
         st.text_input("Call Answer Webhook URL", value="https://your-domain.com/webhook/answer")
-        st.text_input("Call Status Webhook URL", value="https://your-domain.com/webhook/status")
-
+        st.text_input("Call Status Webhook URL", value="https://your-domain.com/webhook/status") 
